@@ -200,6 +200,65 @@ async function main() {
   assert(userReqList.json.higherTypes.length === 1 && userReqList.json.higherTypes[0] === 'vip_lifetime', `Expected higherTypes=['vip_lifetime'], got ${JSON.stringify(userReqList.json.higherTypes)}`)
   assert(userReqList.json.processedTypes.includes('vip_monthly') && userReqList.json.processedTypes.includes('vip_half_year'), `Expected processedTypes to include monthly & half_year`)
 
+  console.log('7c. Checking dual-client single-slot session kick (1 Web + 1 Desktop) & idempotent sync...')
+  // Reset userToken came from reset-by-token (defaults to web). Now login 1 desktop session:
+  const deskLogin1 = await req('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: testEmail, password: 'NewPassword123', clientType: 'desktop' }),
+  })
+  assert(deskLogin1.ok && deskLogin1.json.token && deskLogin1.json.clientType === 'desktop', `Desktop login 1 failed: ${deskLogin1.text}`)
+  const deskToken1 = deskLogin1.json.token
+
+  // Both web (userToken) and desktop (deskToken1) must work concurrently!
+  const webCheck1 = await req('/api/user/sync', { headers: { Authorization: `Bearer ${userToken}` } })
+  const deskCheck1 = await req('/api/user/sync', { headers: { Authorization: `Bearer ${deskToken1}` } })
+  assert(webCheck1.ok && deskCheck1.ok, `Expected both 1 web & 1 desktop active concurrently`)
+
+  // Login 2nd web session -> must kick 1st web session (userToken), while deskToken1 stays alive!
+  const webLogin2 = await req('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: testEmail, password: 'NewPassword123', clientType: 'web' }),
+  })
+  assert(webLogin2.ok && webLogin2.json.token, `Web login 2 failed: ${webLogin2.text}`)
+  const webToken2 = webLogin2.json.token
+  const kickedWeb = await req('/api/user/sync', { headers: { Authorization: `Bearer ${userToken}` } })
+  assert(kickedWeb.status === 401 && kickedWeb.json?.code === 'SESSION_KICKED', `Expected SESSION_KICKED for old web, got ${kickedWeb.status} ${kickedWeb.text}`)
+  const deskStillAlive = await req('/api/user/sync', { headers: { Authorization: `Bearer ${deskToken1}` } })
+  assert(deskStillAlive.ok, `Expected desktop session still alive after web kick, got ${deskStillAlive.text}`)
+
+  // Login 2nd desktop session -> must kick 1st desktop session (deskToken1), while webToken2 stays alive!
+  const deskLogin2 = await req('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: testEmail, password: 'NewPassword123', clientType: 'desktop' }),
+  })
+  assert(deskLogin2.ok && deskLogin2.json.token, `Desktop login 2 failed: ${deskLogin2.text}`)
+  const deskToken2 = deskLogin2.json.token
+  const kickedDesk = await req('/api/user/sync', { headers: { Authorization: `Bearer ${deskToken1}` } })
+  assert(kickedDesk.status === 401 && kickedDesk.json?.code === 'SESSION_KICKED', `Expected SESSION_KICKED for old desktop, got ${kickedDesk.status} ${kickedDesk.text}`)
+  const webStillAlive = await req('/api/user/sync', { headers: { Authorization: `Bearer ${webToken2}` } })
+  assert(webStillAlive.ok, `Expected webToken2 still alive after desktop kick`)
+
+  // Idempotent sync replay via POST /api/user/sync
+  const evId = `e2e_ev_${Date.now()}`
+  const syncPush1 = await req('/api/user/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${deskToken2}` },
+    body: JSON.stringify({ events: [{ eventId: evId, addStudySeconds: 60, addSentenceCount: 5 }] }),
+  })
+  assert(syncPush1.ok && syncPush1.json.appliedCount === 1, `Sync push 1 failed: ${syncPush1.text}`)
+  const expAfterSync1 = syncPush1.json.profile.exp
+
+  // Replay exact same eventId from webToken2 -> must deduplicate!
+  const syncPush2 = await req('/api/user/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${webToken2}` },
+    body: JSON.stringify({ events: [{ eventId: evId, addStudySeconds: 60, addSentenceCount: 5 }] }),
+  })
+  assert(syncPush2.ok && syncPush2.json.deduplicatedCount === 1 && syncPush2.json.profile.exp === expAfterSync1, `Expected deduplicatedCount=1 and unchanged exp, got ${syncPush2.text}`)
+
   console.log('8. Checking disabled user login returns 403...')
   const banRes = await req(`/api/admin/users/${userId}/status`, {
     method: 'PUT',
