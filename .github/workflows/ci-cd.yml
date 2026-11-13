@@ -16,6 +16,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run typecheck
       - run: npm run build
       - name: Run E2E regression tests

@@ -1,4 +1,4 @@
-const BASE = 'http://localhost:3001'
+const BASE = process.env.E2E_BASE_URL || 'http://localhost:3001'
 
 function assert(cond, msg) {
   if (!cond) throw new Error(`ASSERTION FAILED: ${msg}`)
@@ -24,9 +24,9 @@ async function main() {
   assert(idorTry.status === 401, `Expected 401 for unauthenticated /api/user/profile?userId=8723192, got ${idorTry.status}`)
 
   console.log('1b. Checking security headers on /api/health...')
-  const healthRes = await fetch(`${BASE}/api/health`)
-  assert(healthRes.headers.get('x-content-type-options') === 'nosniff', 'Missing X-Content-Type-Options: nosniff')
-  assert(healthRes.headers.get('x-frame-options') === 'SAMEORIGIN', 'Missing X-Frame-Options: SAMEORIGIN')
+  const secHealthRes = await fetch(`${BASE}/api/health`)
+  assert(secHealthRes.headers.get('x-content-type-options') === 'nosniff', 'Missing X-Content-Type-Options: nosniff')
+  assert(secHealthRes.headers.get('x-frame-options') === 'SAMEORIGIN', 'Missing X-Frame-Options: SAMEORIGIN')
 
   console.log('2. Logging in as immutable super admin (admin / AsAhouse34231724)...')
   const adminLogin = await req('/api/admin/login', {
@@ -259,13 +259,77 @@ async function main() {
   })
   assert(syncPush2.ok && syncPush2.json.deduplicatedCount === 1 && syncPush2.json.profile.exp === expAfterSync1, `Expected deduplicatedCount=1 and unchanged exp, got ${syncPush2.text}`)
 
-  console.log('8. Checking disabled user login returns 403...')
+  console.log('1c. Checking unauthenticated /api/user/settings, /api/user/menu, /api/user/purchases return 401...')
+  for (const p of ['/api/user/settings', '/api/user/menu', '/api/user/purchases']) {
+    const r = await req(p)
+    assert(r.status === 401, `Expected 401 for unauthenticated ${p}, got ${r.status}`)
+  }
+
+  console.log('1c. Checking /api/tts length limit (>500 chars returns 400)...')
+  const ttsLong = await req(`/api/tts?text=${'a'.repeat(501)}`)
+  assert(ttsLong.status === 400, `Expected 400 for long TTS text, got ${ttsLong.status}`)
+
+  console.log('7b. Checking user token cannot access admin endpoints, forgot-password preserves old password & masks logs, and SSRF is blocked...')
+  const userTryAdmin = await req('/api/admin/users', { headers: { Authorization: `Bearer ${webToken2}` } })
+  assert(userTryAdmin.status === 401, `Expected 401 for user accessing admin endpoint, got ${userTryAdmin.status}`)
+
+  const ssrfConfig = await req('/api/sync/config', {
+    method: 'PUT',
+    headers: adminHeaders,
+    body: JSON.stringify({ remoteSyncUrl: 'http://169.254.169.254/latest/meta-data' }),
+  })
+  assert(ssrfConfig.status === 400, `Expected 400 for SSRF metadata URL, got ${ssrfConfig.status}`)
+
+  const ssrfLocal = await req('/api/sync/remote', {
+    method: 'POST',
+    headers: adminHeaders,
+    body: JSON.stringify({ remoteUrl: 'http://127.0.0.1:3001/api/sync/export' }),
+  })
+  assert(!ssrfLocal.ok, `Expected SSRF localhost sync to fail, got ${ssrfLocal.status}`)
+
+  const forgotCorsReject = await req('/api/auth/forgot-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' },
+    body: JSON.stringify({ email: testEmail }),
+  })
+  assert(!forgotCorsReject.ok, `Expected CORS to reject evil.example Origin, got ${forgotCorsReject.status}`)
+
+  const forgotSpoof = await req('/api/auth/forgot-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: testEmail }),
+  })
+  assert(forgotSpoof.ok, `Forgot password failed: ${forgotSpoof.text}`)
+
+  // Verify old password still works (prevents unauthenticated DoS)
+  const stillWorksLogin = await req('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: testEmail, password: 'NewPassword123', clientType: 'web' }),
+  })
+  assert(stillWorksLogin.ok && stillWorksLogin.json?.token, `Old password should remain valid before reset link is used: ${stillWorksLogin.text}`)
+  const freshWebToken = stillWorksLogin.json.token
+
+  // Verify email_logs masks temp_password and token, and rejects evil.example Origin
+  const emailLogsRes = await req('/api/admin/email-logs', { headers: adminHeaders })
+  assert(emailLogsRes.ok && Array.isArray(emailLogsRes.json), 'Failed to fetch email-logs')
+  const recentLog = emailLogsRes.json.find(l => l.recipient === testEmail)
+  assert(recentLog, 'Expected email log entry for forgot-password')
+  assert(!recentLog.reset_link.includes('evil.example'), `Reset link poisoned by Origin header: ${recentLog.reset_link}`)
+  assert(!recentLog.reset_link.includes('token=') || recentLog.reset_link.includes('token=***'), `Reset token leaked in email_logs: ${recentLog.reset_link}`)
+
+  console.log('8. Checking disabled user revokes active session immediately and login returns 403...')
   const banRes = await req(`/api/admin/users/${userId}/status`, {
     method: 'PUT',
     headers: adminHeaders,
     body: JSON.stringify({ status: 'disabled' }),
   })
   assert(banRes.ok, `Ban failed: ${banRes.text}`)
+
+  const kickedAfterBan = await req('/api/user/settings', {
+    headers: { Authorization: `Bearer ${freshWebToken}` },
+  })
+  assert(kickedAfterBan.status === 403 || kickedAfterBan.status === 401, `Expected 403/401 for banned user active token, got ${kickedAfterBan.status}`)
   const bannedLogin = await req('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
