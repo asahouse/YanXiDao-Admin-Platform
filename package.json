@@ -16,10 +16,11 @@
   "dependencies": {
     "@lucide/vue": "^1.47.0",
     "@tailwindcss/vite": "^4.3.3",
-    "@yanxidao/shared": "git+file:///c:/Users/Benjamin/Documents/agy-space/TangQuDao/repos/yanxidao-shared#v1.0.0",
+    "@yanxidao/shared": "git+file:///c:/Users/Benjamin/Documents/agy-space/TangQuDao/yanxidao-shared#v1.0.0",
     "cors": "^2.8.6",
     "dotenv": "^18.0.2",
     "express": "^5.2.1",
+    "idb-keyval": "^6.3.0",
     "lucide-vue-next": "^1.0.0",
     "msedge-tts": "^2.1.1",
     "mysql2": "^3.24.4",
