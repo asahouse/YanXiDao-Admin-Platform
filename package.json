@@ -1,0 +1,44 @@
+{
+  "name": "yanxidao-admin-platform",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "server": "tsx server/index.ts",
+    "typecheck": "vue-tsc -b",
+    "build": "vue-tsc -b && vite build && npm run build:server",
+    "build:admin": "vue-tsc -b && vite build",
+    "build:server": "node scripts/build-server.mjs",
+    "start:prod": "node dist-server/index.mjs",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "dependencies": {
+    "@lucide/vue": "^1.47.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@yanxidao/shared": "git+file:///c:/Users/Benjamin/Documents/agy-space/TangQuDao/repos/yanxidao-shared#v1.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.2",
+    "express": "^5.2.1",
+    "lucide-vue-next": "^1.0.0",
+    "msedge-tts": "^2.1.1",
+    "mysql2": "^3.24.4",
+    "nodemailer": "^10.5.0",
+    "pinia": "^4.0.3",
+    "tailwindcss": "^4.3.3",
+    "vue": "^3.5.42",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.13.3",
+    "@types/nodemailer": "^8.0.2",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/tsconfig": "^0.9.1",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0",
+    "vue-tsc": "^3.3.11"
+  }
+}
